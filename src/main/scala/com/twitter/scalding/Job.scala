@@ -47,6 +47,11 @@ class Job(val args : Args) extends TupleConversions with FieldConversions {
   @transient
   implicit val flowDef = new FlowDef
 
+  // Make args available as an implicit parameter to any method called by a job.
+  // This is useful for library code, and is safe since there is only ever one
+  // Args per job.
+  implicit val implicitArgs : Args = args
+
   // Use reflection to copy this job:
   def clone(nextargs : Args) : Job = {
     this.getClass
