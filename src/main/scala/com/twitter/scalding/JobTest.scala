@@ -23,6 +23,7 @@ class JobTest(jobName : String) extends TupleConversions {
   private val callbacks = Buffer[() => Unit]()
   private var sourceMap = Map[Source, Buffer[Tuple]]()
   private var sinkSet = Set[Source]()
+  private var fileSet = Set[String]()
 
   def arg(inArg : String, value : List[String]) = {
     argsMap += inArg -> value
@@ -48,14 +49,22 @@ class JobTest(jobName : String) extends TupleConversions {
     this
   }
 
+  // Simulates the existance of a file so that mode.fileExists returns true.  We
+  // do not simulate the file contents; that should be done through mock
+  // sources.
+  def registerFile(filename : String) = {
+    fileSet += filename
+    this
+  }
+
   def run = {
-    Mode.mode = Test(sourceMap)
+    Mode.mode = Test(sourceMap).registerTestFiles(fileSet)
     runAll(Job(jobName, new Args(argsMap)))
     this
   }
 
   def runHadoop = {
-    Mode.mode = HadoopTest(new JobConf(), sourceMap)
+    Mode.mode = HadoopTest(new JobConf(), sourceMap).registerTestFiles(fileSet)
     runAll(Job(jobName, new Args(argsMap)), true)
     this
   }
