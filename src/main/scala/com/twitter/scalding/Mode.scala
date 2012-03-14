@@ -90,6 +90,7 @@ trait HadoopMode extends Mode {
   }
 }
 
+// Overrides fileExists to allow registration of mock filenames for testing.
 trait TestMode extends Mode {
   private var fileSet = Set[String]()
   def registerTestFiles(files : Set[String]) = fileSet = files
