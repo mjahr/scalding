@@ -4,6 +4,7 @@ import scala.collection.mutable.{Buffer, ListBuffer}
 import scala.annotation.tailrec
 
 import cascading.tuple.Tuple
+import cascading.tuple.TupleEntry
 
 import org.apache.hadoop.mapred.JobConf
 
@@ -45,7 +46,7 @@ class JobTest(jobName : String) extends TupleConversions {
     val buffer = new ListBuffer[Tuple]
     sourceMap += s -> buffer
     sinkSet += s
-    callbacks += (() => op(buffer.map{conv(_)}))
+    callbacks += (() => op(buffer.map { tup => conv(new TupleEntry(tup)) }))
     this
   }
 
@@ -59,17 +60,17 @@ class JobTest(jobName : String) extends TupleConversions {
 
 
   def run = {
-    runJob(initJob(Test(sourceMap)), true)
+    runJob(initJob(false), true)
     this
   }
 
-  def runWithoutNext = {
-    runJob(initJob(Test(sourceMap)), false)
+  def runWithoutNext(useHadoop : Boolean = false) = {
+    runJob(initJob(useHadoop), false)
     this
   }
 
   def runHadoop = {
-    runJob(initJob(HadoopTest(new JobConf(), sourceMap)), true)
+    runJob(initJob(true), true)
     this
   }
 
@@ -77,10 +78,18 @@ class JobTest(jobName : String) extends TupleConversions {
   def finish : Unit = { () }
 
   // Registers test files, initializes the global mode, and creates a job.
-  private def initJob(testMode : TestMode) : Job = {
-    // First register test files and set the global mode.
+  private def initJob(useHadoop : Boolean) : Job = {
+    // Create a global mode to use for testing.
+    val testMode : TestMode =
+      if (useHadoop) {
+        HadoopTest(new JobConf(), sourceMap)
+      } else {
+        Test(sourceMap)
+      }
     testMode.registerTestFiles(fileSet)
     Mode.mode = testMode
+
+    // Construct a job.
     Job(jobName, new Args(argsMap))
   }
 
