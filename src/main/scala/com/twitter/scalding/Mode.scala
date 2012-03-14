@@ -58,7 +58,7 @@ abstract class Mode(val sourceStrictness : Boolean) {
     sourceMap.find { _._1.toString == name }.map { _._1 }
   }
 
-  // Returns true if the file exists.
+  // Returns true if the file exists on the current filesystem.
   def fileExists(filename : String) : Boolean
 }
 
@@ -90,7 +90,8 @@ trait HadoopMode extends Mode {
   }
 }
 
-// Overrides fileExists to allow registration of mock filenames for testing.
+// Mix-in trait for test modes; overrides fileExists to allow the registration
+// of mock filenames for testing.
 trait TestMode extends Mode {
   private var fileSet = Set[String]()
   def registerTestFiles(files : Set[String]) = fileSet = files
@@ -114,6 +115,7 @@ case class Local(strict : Boolean) extends Mode(strict) {
   def newFlowConnector(props : Map[AnyRef,AnyRef]) = new LocalFlowConnector(props)
   override def fileExists(filename : String) : Boolean = new File(filename).exists
 }
+
 /**
 * Memory only testing for unit tests
 */
