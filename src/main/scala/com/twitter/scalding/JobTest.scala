@@ -76,7 +76,7 @@ class JobTest(jobName : String) extends TupleConversions {
   // This SITS is unfortunately needed to get around Specs
   def finish : Unit = { () }
 
-  // Registers test files and initializes the global mode.
+  // Registers test files, initializes the global mode, and creates a job.
   private def initJob(testMode : TestMode) : Job = {
     // First register test files and set the global mode.
     testMode.registerTestFiles(fileSet)
@@ -92,8 +92,7 @@ class JobTest(jobName : String) extends TupleConversions {
       case Some(nextjob) => runJob(nextjob, runNext)
       case None => {
         Mode.mode match {
-          case Hdfs(_,_) | HadoopTest(_,_) =>
-            sinkSet.foreach{ _.finalizeHadoopTestOutput(Mode.mode) }
+          case HadoopTest(_,_) => sinkSet.foreach{ _.finalizeHadoopTestOutput(Mode.mode) }
           case _ => ()
         }
         // Now it is time to check the test conditions:
