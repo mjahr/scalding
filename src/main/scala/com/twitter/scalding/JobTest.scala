@@ -57,32 +57,39 @@ class JobTest(jobName : String) extends TupleConversions {
     this
   }
 
-  // Registers test files and initializes the global mode.
-  private def setMode(testMode : TestMode) = {
-    testMode.registerTestFiles(fileSet)
-    Mode.mode = testMode
-  }
 
   def run = {
-    setMode(Test(sourceMap))
-    runAll(Job(jobName, new Args(argsMap)))
+    runJob(initJob(Test(sourceMap)), true)
+    this
+  }
+
+  def runWithoutNext = {
+    runJob(initJob(Test(sourceMap)), false)
     this
   }
 
   def runHadoop = {
-    setMode(HadoopTest(new JobConf(), sourceMap))
-    runAll(Job(jobName, new Args(argsMap)))
+    runJob(initJob(HadoopTest(new JobConf(), sourceMap)), true)
     this
   }
 
   // This SITS is unfortunately needed to get around Specs
   def finish : Unit = { () }
 
+  // Registers test files and initializes the global mode.
+  private def initJob(testMode : TestMode) : Job = {
+    // First register test files and set the global mode.
+    testMode.registerTestFiles(fileSet)
+    Mode.mode = testMode
+    Job(jobName, new Args(argsMap))
+  }
+
   @tailrec
-  final def runAll(job : Job) : Unit = {
+  private final def runJob(job : Job, runNext : Boolean) : Unit = {
     job.buildFlow.complete
-    job.next match {
-      case Some(nextjob) => runAll(nextjob)
+    val next : Option[Job] = if (runNext) { job.next } else { None }
+    next match {
+      case Some(nextjob) => runJob(nextjob, runNext)
       case None => {
         Mode.mode match {
           case Hdfs(_,_) | HadoopTest(_,_) =>
@@ -94,12 +101,4 @@ class JobTest(jobName : String) extends TupleConversions {
       }
     }
   }
-
-  def runWithoutNext = {
-    setMode(Test(sourceMap))
-    Job(jobName, new Args(argsMap)).buildFlow.complete
-    callbacks.foreach { cb => cb() }
-    this
-  }
-
 }
