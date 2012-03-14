@@ -92,11 +92,8 @@ trait HadoopMode extends Mode {
 
 trait TestMode extends Mode {
   private var fileSet = Set[String]()
-  def registerTestFiles(files : Set[String]) = {
-    fileSet = files
-    this
-  }
-  override def fileExists(filename : String) = fileSet.contains(filename)
+  def registerTestFiles(files : Set[String]) = fileSet = files
+  override def fileExists(filename : String) : Boolean = fileSet.contains(filename)
 }
 
 case class Hdfs(strict : Boolean, val config : Configuration) extends Mode(strict) with HadoopMode {
