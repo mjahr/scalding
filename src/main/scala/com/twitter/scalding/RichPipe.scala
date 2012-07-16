@@ -27,12 +27,10 @@ import cascading.operation.filter._
 import cascading.tuple._
 import cascading.cascade._
 
-object RichPipe extends FieldConversions with TupleConversions with java.io.Serializable {
+object RichPipe extends java.io.Serializable {
   private var nextPipe = -1
 
   def apply(p : Pipe) = new RichPipe(p)
-
-  implicit def pipeToRichPipe(pipe : Pipe) : RichPipe = new RichPipe(pipe)
 
   def getNextName = {
     nextPipe = nextPipe + 1
@@ -48,7 +46,7 @@ object RichPipe extends FieldConversions with TupleConversions with java.io.Seri
    */
   def setReducers(p : Pipe, reducers : Int) : Pipe = {
     if(reducers > 0) {
-      p.getProcessConfigDef()
+      p.getStepConfigDef()
         .setProperty(REDUCER_KEY, reducers.toString)
     } else if(reducers != -1) {
       throw new IllegalArgumentException("Number of reducers must be non-negative")
@@ -58,8 +56,9 @@ object RichPipe extends FieldConversions with TupleConversions with java.io.Seri
 }
 
 class RichPipe(val pipe : Pipe) extends java.io.Serializable with JoinAlgorithms {
-  import RichPipe._
-
+  // We need this for the implicits
+  import Dsl._
+  import RichPipe.assignName
   // Rename the current pipe
   def name(s : String) = new Pipe(s, pipe)
 
@@ -188,6 +187,11 @@ class RichPipe(val pipe : Pipe) extends java.io.Serializable with JoinAlgorithms
       val mf = new FlatMapFunction[A,T](fn, fs._2, conv, setter)
       new Each(pipe, fs._1, mf, Fields.RESULTS)
   }
+  // the same as flatMap(fs) { it : Iterable[T] => it }, common enough to be useful.
+  def flatten[T](fs : (Fields, Fields))
+    (implicit conv : TupleConverter[Iterable[T]], setter : TupleSetter[T]) : Pipe = {
+    flatMap[Iterable[T],T](fs)({ it : Iterable[T] => it })(conv, setter)
+  }
 
   /**
    * This is an analog of the SQL/Excel unpivot function which converts columns of data
@@ -226,9 +230,13 @@ class RichPipe(val pipe : Pipe) extends java.io.Serializable with JoinAlgorithms
     pipe
   }
 
-  def normalize(f : Symbol) : Pipe = {
+  def normalize(f : Symbol, useTiny : Boolean = false) : Pipe = {
     val total = groupAll { _.sum(f -> 'total_for_normalize) }
-    crossWithTiny(total)
+    if(useTiny) {
+      crossWithTiny(total)
+    } else {
+      crossWithSmaller(total)
+    }
     .map((f, 'total_for_normalize) -> f) { args : (Double, Double) =>
       args._1 / args._2
     }
@@ -242,10 +250,21 @@ class RichPipe(val pipe : Pipe) extends java.io.Serializable with JoinAlgorithms
     * can be cast into integers. The output field 'field3 will be of tupe (Int, Int)
     *
     */
-  def pack[T](fs : (Fields, Fields))(implicit packer : TuplePacker[T]) : Pipe = {
+  def pack[T](fs : (Fields, Fields))(implicit packer : TuplePacker[T], setter : TupleSetter[T]) : Pipe = {
     val (fromFields, toFields) = fs
     assert(toFields.size == 1, "Can only output 1 field in pack")
-    pipe.map[TupleEntry, T](fs) { packer.newInstance(_) }
+    val conv = packer.newConverter(fromFields)
+    pipe.map(fs) { input : T => input } (conv, setter)
+  }
+
+  /**
+    * Same as pack but only the to fields are preserved.
+    */
+  def packTo[T](fs : (Fields, Fields))(implicit packer : TuplePacker[T], setter : TupleSetter[T]) : Pipe = {
+    val (fromFields, toFields) = fs
+    assert(toFields.size == 1, "Can only output 1 field in pack")
+    val conv = packer.newConverter(fromFields)
+    pipe.mapTo(fs) { input : T => input } (conv, setter)
   }
 
   /** The opposite of pack. Unpacks the input field of type T into
@@ -255,10 +274,20 @@ class RichPipe(val pipe : Pipe) extends java.io.Serializable with JoinAlgorithms
     *
     * will unpack 'field1 into 'field2 and 'field3
     */
-  def unpack[T](fs : (Fields, Fields))(implicit unpacker : TupleUnpacker[T]) : Pipe = {
+  def unpack[T](fs : (Fields, Fields))(implicit unpacker : TupleUnpacker[T], conv : TupleConverter[T]) : Pipe = {
     val (fromFields, toFields) = fs
     assert(fromFields.size == 1, "Can only take 1 input field in unpack")
     val setter = unpacker.newSetter(toFields)
-    pipe.map[T, Tuple](fs) { input : T => setter(input) }
+    pipe.map(fs) { input : T => input } (conv, setter)
+  }
+
+  /**
+    * Same as unpack but only the to fields are preserved.
+    */
+  def unpackTo[T](fs : (Fields, Fields))(implicit unpacker : TupleUnpacker[T], conv : TupleConverter[T]) : Pipe = {
+    val (fromFields, toFields) = fs
+    assert(fromFields.size == 1, "Can only take 1 input field in unpack")
+    val setter = unpacker.newSetter(toFields)
+    pipe.mapTo(fs) { input : T => input } (conv, setter)
   }
 }

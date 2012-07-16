@@ -15,19 +15,15 @@ limitations under the License.
 */
 package com.twitter.scalding
 
-import com.twitter.maple.tap.MemorySourceTap
-
 import java.io.File
-import java.util.TimeZone
-import java.util.Calendar
-import java.util.{Map => JMap}
+import java.util.{Calendar, TimeZone, UUID, Map => JMap}
 
 import cascading.flow.hadoop.HadoopFlowProcess
 import cascading.flow.{FlowProcess, FlowDef}
 import cascading.flow.local.LocalFlowProcess
 import cascading.pipe.Pipe
 import cascading.scheme.Scheme
-import cascading.scheme.local.{LocalScheme => CLScheme, TextLine => CLTextLine, TextDelimited => CLTextDelimited}
+import cascading.scheme.local.{TextLine => CLTextLine, TextDelimited => CLTextDelimited}
 import cascading.scheme.hadoop.{TextLine => CHTextLine, TextDelimited => CHTextDelimited, SequenceFile => CHSequenceFile}
 import cascading.tap.hadoop.Hfs
 import cascading.tap.MultiSourceTap
@@ -62,7 +58,7 @@ abstract class FileSource extends Source {
   def hdfsWritePath = hdfsPaths.last
   def localPath : String
 
-  override def createTap(readOrWrite : AccessMode)(implicit mode : Mode) : RawTap = {
+  override def createTap(readOrWrite : AccessMode)(implicit mode : Mode) : Tap[_,_,_] = {
     mode match {
       // TODO support strict in Local
       case Local(_) => {
@@ -123,8 +119,8 @@ abstract class FileSource extends Source {
     }
   }
 
-  protected def createHdfsReadTap(hdfsMode : Hdfs) : Tap[HadoopFlowProcess, JobConf, RecordReader[_,_], _] = {
-    val taps : List[Tap[HadoopFlowProcess, JobConf, RecordReader[_,_], _]] =
+  protected def createHdfsReadTap(hdfsMode : Hdfs) : Tap[JobConf, _, _] = {
+    val taps : List[Tap[JobConf, RecordReader[_,_], OutputCollector[_,_]]] =
       goodHdfsPaths(hdfsMode)
         .toList.map { path => castHfsTap(new Hfs(hdfsScheme, path, SinkMode.KEEP)) }
     taps.size match {
@@ -135,9 +131,15 @@ abstract class FileSource extends Source {
         castHfsTap(new Hfs(hdfsScheme, hdfsPaths.head, SinkMode.KEEP))
       }
       case 1 => taps.head
-      case _ => new MultiSourceTap( taps : _*)
+      case _ => new ScaldingMultiSourceTap(taps)
     }
   }
+}
+
+class ScaldingMultiSourceTap(taps : Seq[Tap[JobConf, RecordReader[_,_], OutputCollector[_,_]]])
+    extends MultiSourceTap[Tap[JobConf, RecordReader[_,_], OutputCollector[_,_]], JobConf, RecordReader[_,_]](taps : _*) {
+  private final val randomId = UUID.randomUUID.toString
+  override def getIdentifier() = randomId
 }
 
 /**
@@ -145,7 +147,7 @@ abstract class FileSource extends Source {
 */
 trait TextLineScheme extends Mappable[String] {
   override def localScheme = new CLTextLine()
-  override def hdfsScheme = new CHTextLine().asInstanceOf[Scheme[FlowProcess[JobConf],JobConf,RecordReader[_,_],OutputCollector[_,_],_,_]]
+  override def hdfsScheme = new CHTextLine().asInstanceOf[Scheme[JobConf,RecordReader[_,_],OutputCollector[_,_],_,_]]
   //In textline, 0 is the byte position, the actual text string is in column 1
   override val columnNums = Seq(1)
 }
@@ -160,10 +162,13 @@ trait DelimitedScheme extends Source {
   //This is passed directly to cascading where null is interpretted as string
   val types : Array[Class[_]] = null
   val separator = "\t"
+  val skipHeader = false
+  val writeHeader = false
   //These should not be changed:
-  override def localScheme = new CLTextDelimited(fields, separator, types)
+  override def localScheme = new CLTextDelimited(fields, skipHeader, writeHeader, separator, types)
+
   override def hdfsScheme = {
-    new CHTextDelimited(fields, separator, types).asInstanceOf[Scheme[FlowProcess[JobConf],JobConf,RecordReader[_,_],OutputCollector[_,_],_,_]]
+    new CHTextDelimited(fields, skipHeader, writeHeader, separator, types).asInstanceOf[Scheme[JobConf,RecordReader[_,_],OutputCollector[_,_],_,_]]
   }
 }
 
@@ -172,7 +177,7 @@ trait SequenceFileScheme extends Source {
   val fields = Fields.ALL
   // TODO Cascading doesn't support local mode yet
   override def hdfsScheme = {
-    new CHSequenceFile(fields).asInstanceOf[Scheme[FlowProcess[JobConf],JobConf,RecordReader[_,_],OutputCollector[_,_],_,_]]
+    new CHSequenceFile(fields).asInstanceOf[Scheme[JobConf,RecordReader[_,_],OutputCollector[_,_],_,_]]
   }
 }
 
@@ -184,11 +189,13 @@ abstract class FixedPathSource(path : String*) extends FileSource {
 /**
 * Tab separated value source
 */
-case class Tsv(p : String, f : Fields = Fields.ALL) extends FixedPathSource(p)
+
+case class Tsv(p : String, f : Fields = Fields.ALL, sh : Boolean = false, wh: Boolean = false) extends FixedPathSource(p)
   with DelimitedScheme {
     override val fields = f
+    override val skipHeader = sh
+    override val writeHeader = wh
 }
-
 /**
 * One separated value (commonly used by Pig)
 */
@@ -268,4 +275,6 @@ abstract class MostRecentGoodSource(p : String, dr : DateRange, t : TimeZone)
 
 case class TextLine(p : String) extends FixedPathSource(p) with TextLineScheme
 
-case class SequenceFile(p : String, f : Fields = Fields.ALL) extends FixedPathSource(p) with SequenceFileScheme
+case class SequenceFile(p : String, f : Fields = Fields.ALL) extends FixedPathSource(p) with SequenceFileScheme {
+  override val fields = f
+}

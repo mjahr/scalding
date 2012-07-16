@@ -55,6 +55,11 @@ trait Monoid[@specialized(Int,Long,Float,Double) T] extends java.io.Serializable
     }
   }
   def plus(l : T, r : T) : T
+
+  // Left sum: (((a + b) + c) + d)
+  def sum(iter : Traversable[T]) : T = {
+    iter.foldLeft(zero) { (old, current) => plus(old, current) }
+  }
 }
 
 trait Group[@specialized(Int,Long,Float,Double) T] extends Monoid[T] {
@@ -66,6 +71,10 @@ trait Group[@specialized(Int,Long,Float,Double) T] extends Monoid[T] {
 trait Ring[@specialized(Int,Long,Float,Double) T] extends Group[T] {
   def one : T // Multiplicative identity
   def times(l : T, r : T) : T
+  // Left product: (((a * b) * c) * d)
+  def product(iter : Traversable[T]) : T = {
+    iter.foldLeft(one) { (old, current) => times(old, current) }
+  }
 }
 
 trait Field[@specialized(Int,Long,Float,Double) T] extends Ring[T] {
@@ -214,6 +223,13 @@ object BooleanField extends Field[Boolean] {
   }
 }
 
+// Trivial group, but possibly useful to make a group of (Unit, T) for some T.
+object UnitGroup extends Group[Unit] {
+  override def zero = ()
+  override def negate(u : Unit) = ()
+  override def plus(l : Unit, r : Unit) = ()
+}
+
 /**
 * Combine two monoids into a product monoid
 */
@@ -245,6 +261,7 @@ class Tuple2Ring[T,U](implicit tring : Ring[T], uring : Ring[U]) extends Ring[(T
 }
 
 object Monoid extends GeneratedMonoidImplicits {
+  implicit val unitMonoid : Monoid[Unit] = UnitGroup
   implicit val boolMonoid : Monoid[Boolean] = BooleanField
   implicit val intMonoid : Monoid[Int] = IntRing
   implicit val longMonoid : Monoid[Long] = LongRing
@@ -259,6 +276,7 @@ object Monoid extends GeneratedMonoidImplicits {
 }
 
 object Group extends GeneratedGroupImplicits {
+  implicit val unitGroup : Group[Unit] = UnitGroup
   implicit val boolGroup : Group[Boolean] = BooleanField
   implicit val intGroup : Group[Int] = IntRing
   implicit val longGroup : Group[Long] = LongRing

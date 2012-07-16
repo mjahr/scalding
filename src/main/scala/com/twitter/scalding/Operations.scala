@@ -23,6 +23,33 @@ import cascading.pipe._
 
 import scala.collection.JavaConverters._
 
+import org.apache.hadoop.conf.Configuration
+
+import com.esotericsoftware.kryo.Kryo;
+
+object CascadingUtils {
+  def flowProcessToConfiguration(fp : FlowProcess[_]) : Configuration = {
+    val confCopy = fp.asInstanceOf[FlowProcess[AnyRef]].getConfigCopy
+    if (confCopy.isInstanceOf[Configuration]) {
+      confCopy.asInstanceOf[Configuration]
+    }
+    else {
+      // For local mode, we don't have a hadoop configuration
+      val conf = new Configuration()
+      fp.getPropertyKeys.asScala.foreach { key =>
+        conf.set(key, fp.getStringProperty(key))
+      }
+      conf
+    }
+  }
+  def kryoFor(fp : FlowProcess[_]) : Kryo = {
+    (new cascading.kryo.KryoSerialization(flowProcessToConfiguration(fp)))
+      .populatedKryo
+  }
+}
+
+import CascadingUtils.kryoFor
+
   class FlatMapFunction[S,T](fn : S => Iterable[T], fields : Fields,
     conv : TupleConverter[S], set : TupleSetter[T])
     extends BaseOperation[Any](fields) with Function[Any] {
@@ -58,7 +85,8 @@ import scala.collection.JavaConverters._
     extends BaseOperation[X](fields) with Aggregator[X] {
 
     def start(flowProcess : FlowProcess[_], call : AggregatorCall[X]) {
-      call.setContext(init)
+      val deepCopyInit = kryoFor(flowProcess).copy(init)
+      call.setContext(deepCopyInit)
     }
 
     def aggregate(flowProcess : FlowProcess[_], call : AggregatorCall[X]) {
@@ -120,7 +148,7 @@ import scala.collection.JavaConverters._
   }
 
   /**
-   * This handles the mapReduceMap and MkString work on the map-side of the operation.  The code below
+   * This handles the mapReduceMap work on the map-side of the operation.  The code below
    * attempts to be optimal with respect to memory allocations and performance, not functional
    * style purity.
    */
@@ -200,85 +228,15 @@ import scala.collection.JavaConverters._
         new MRMFunctor[T,X](mfn, rfn, middleFields, startConv, midSet),
         new MRMAggregator[X,X,U](args => args, rfn, mfn2, declaredFields, midConv, endSet))
 
-  class MkStringFunctor(sep : String, fields : Fields) extends FoldFunctor[List[String]](fields) {
-
-    private def stringOf(args : TupleEntry) = args.getTuple.getString(0)
-
-    // Make the singleton list:
-    override def first(args : TupleEntry) = List(stringOf(args))
-    // Append to the list:
-    override def subsequent(oldValue : List[String], newArgs : TupleEntry) = {
-      stringOf(newArgs) :: oldValue
-    }
-    // Make the string and put it in a Tuple
-    override def finish(lastValue : List[String]) = new Tuple(lastValue.mkString(sep))
-  }
-
-  class MkStringAggregator(start : String, sep : String, end : String, fields : Fields)
-    extends BaseOperation[List[String]](fields) with Aggregator[List[String]] {
-      def start(fp : FlowProcess[_], call : AggregatorCall[List[String]]) {
-        call.setContext(Nil)
-      }
-      def aggregate(fp : FlowProcess[_], call : AggregatorCall[List[String]]) {
-        call.setContext(call.getArguments.getTuple.getString(0) :: (call.getContext))
-      }
-      def complete(fp : FlowProcess[_], call : AggregatorCall[List[String]]) {
-        call.getOutputCollector.add(new Tuple(call.getContext.mkString(start,sep,end)))
-      }
-    }
-
-  class MkStringBy(start : String, sep : String, end : String,
-                   arguments : Fields, declaredFields : Fields) extends
-                   AggregateBy(arguments,
-                               new MkStringFunctor(sep, declaredFields),
-                               new MkStringAggregator(start, sep, end, declaredFields))
-
-
-  class ScanBuffer[T,X](fn : (X,T) => X, init : X, fields : Fields,
+  class BufferOp[I,T,X](init : I, iterfn : (I, Iterator[T]) => TraversableOnce[X], fields : Fields,
     conv : TupleConverter[T], set : TupleSetter[X])
     extends BaseOperation[Any](fields) with Buffer[Any] {
 
     def operate(flowProcess : FlowProcess[_], call : BufferCall[Any]) {
-      var accum = init
-      //TODO: I'm not sure we want to add output for the accumulator, this
-      //pollutes the output with nulls where there was not an input row.
-      call.getOutputCollector.add(set(accum))
-      call.getArgumentsIterator.asScala.foreach {entry =>
-        accum = fn(accum, conv(entry))
-        call.getOutputCollector.add(set(accum))
-      }
-    }
-  }
-  class TakeBuffer(cnt : Int) extends BaseOperation[Any](Fields.ARGS) with Buffer[Any] {
-    def operate(flowProcess : FlowProcess[_], call : BufferCall[Any]) {
-      call.getArgumentsIterator.asScala.take(cnt).foreach {entry =>
-        call.getOutputCollector.add(entry)
-      }
-    }
-  }
-  class TakeWhileBuffer[T](fn : T => Boolean, conv : TupleConverter[T])
-    extends BaseOperation[Any](Fields.ARGS) with Buffer[Any] {
-    def operate(flowProcess : FlowProcess[_], call : BufferCall[Any]) {
-      call.getArgumentsIterator
-        .asScala
-        .takeWhile((te : TupleEntry) => fn(conv(te)))
-        .foreach { call.getOutputCollector.add(_) }
-    }
-  }
-  class DropBuffer(cnt : Int) extends BaseOperation[Any](Fields.ARGS) with Buffer[Any] {
-    def operate(flowProcess : FlowProcess[_], call : BufferCall[Any]) {
-      call.getArgumentsIterator.asScala.drop(cnt).foreach {entry =>
-        call.getOutputCollector.add(entry)
-      }
-    }
-  }
-  class DropWhileBuffer[T](fn : T => Boolean, conv : TupleConverter[T])
-    extends BaseOperation[Any](Fields.ARGS) with Buffer[Any] {
-    def operate(flowProcess : FlowProcess[_], call : BufferCall[Any]) {
-      call.getArgumentsIterator
-        .asScala
-        .dropWhile((te : TupleEntry) => fn(conv(te)))
-        .foreach { call.getOutputCollector.add(_) }
+      val deepCopyInit = kryoFor(flowProcess).copy(init)
+      val oc = call.getOutputCollector
+      val in = call.getArgumentsIterator.asScala.map { entry => conv(entry) }
+      iterfn(deepCopyInit, in).foreach { x => oc.add(set(x)) }
     }
   }
   /*

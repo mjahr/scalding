@@ -34,7 +34,8 @@ import scala.util.Random
  *
  */
 trait JoinAlgorithms {
-  import RichPipe._
+  import Dsl._
+  import RichPipe.assignName
 
   def pipe : Pipe
 
@@ -69,6 +70,12 @@ trait JoinAlgorithms {
     pipe.map(() -> '__joinBig__) { (u:Unit) => 1 }
       .joinWithTiny('__joinBig__ -> '__joinTiny__, tinyJoin)
       .discard('__joinBig__, '__joinTiny__)
+  }
+  def crossWithSmaller(p : Pipe, replication : Int = 20) = {
+    val smallJoin = p.map(() -> '__joinSmall__) { (u:Unit) => 1 }
+    pipe.map(() -> '__joinBig__) { (u:Unit) => 1 }
+      .blockJoinWithSmaller('__joinBig__ -> '__joinSmall__, smallJoin, rightReplication = replication)
+      .discard('__joinBig__, '__joinSmall__)
   }
 
   // Rename the collisions and return the pipe and the new names, and the fields to discard
